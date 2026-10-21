@@ -2050,12 +2050,21 @@ async function main() {
     if (toolName === 'Task' || toolName === 'Agent') {
       const rawTranscriptPath = data.transcript_path || data.transcriptPath || '';
       const transcriptPath = resolveTranscriptPath(rawTranscriptPath, directory);
-      const preflightBlock = evaluateAgentHeavyPreflight({
+      const preflightBlock = await evaluateAgentHeavyPreflight({
         toolName,
         transcriptPath,
+        data,
+        directory,
       });
       if (preflightBlock) {
-        console.log(JSON.stringify(preflightBlock));
+        console.log(JSON.stringify({
+          continue: true,
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+            permissionDecisionReason: preflightBlock.reason,
+          },
+        }));
         return;
       }
     }

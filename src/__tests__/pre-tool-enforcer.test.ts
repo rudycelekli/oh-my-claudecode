@@ -1085,11 +1085,11 @@ describe('pre-tool-enforcer fallback gating (issue #970)', () => {
     }
   });
 
-  it('blocks agent-heavy Task preflight when transcript context budget is exhausted', () => {
+  it('blocks agent-heavy Task preflight when transcript context budget is exhausted', async () => {
     const transcriptPath = join(tempDir, 'transcript.jsonl');
     writeTranscriptWithContext(transcriptPath, 1000, 800); // 80%
 
-    const output = evaluateAgentHeavyPreflight({
+    const output = await evaluateAgentHeavyPreflight({
       toolName: 'Task',
       transcriptPath,
     });
@@ -1099,12 +1099,63 @@ describe('pre-tool-enforcer fallback gating (issue #970)', () => {
     expect(String(output?.reason)).toContain('Safe recovery');
   });
 
-  it('falls back to the default preflight threshold when the env value is invalid', () => {
+  for (const toolName of ['Task', 'Agent']) {
+    it(`blocks ${toolName} from the session HUD context cache when the transcript omits window metadata`, () => {
+      const sessionId = `preflight-hud-${toolName.toLowerCase()}`;
+      const transcriptPath = join(tempDir, 'transcript.jsonl');
+      writeJson(transcriptPath, { message: { usage: {
+        input_tokens: 10,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 159990,
+        output_tokens: 1,
+      } } });
+      writeJson(join(tempDir, '.omc', 'state', 'sessions', sessionId, 'hud-stdin-cache.json'), {
+        cwd: tempDir,
+        context_window: {
+          used_percentage: 80,
+          context_window_size: 200000,
+          current_usage: { input_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 159990, output_tokens: 1 },
+        },
+      });
+      const output = runPreToolEnforcerWithEnv({
+        tool_name: toolName,
+        tool_input: { subagent_type: 'oh-my-claudecode:executor', prompt: 'Inspect the fixture' },
+        cwd: tempDir,
+        session_id: sessionId,
+        transcript_path: transcriptPath,
+      }, { CLAUDE_PLUGIN_ROOT: process.cwd() });
+      // Both the current and the documented deprecated deny formats are valid.
+      const hook = output.hookSpecificOutput as Record<string, unknown> | undefined;
+      expect(hook?.permissionDecision === 'deny' || output.decision === 'block').toBe(true);
+      expect(String(hook?.permissionDecisionReason ?? output.reason)).toContain('80%');
+    });
+
+    it(`allows ${toolName} with low own-session usage despite another high-context cache`, () => {
+      const sessionId = `preflight-low-${toolName.toLowerCase()}`;
+      for (const [id, used] of [[sessionId, 10], ['foreign-session', 90]] as const) {
+        writeJson(join(tempDir, '.omc', 'state', 'sessions', id, 'hud-stdin-cache.json'), {
+          cwd: tempDir,
+          context_window: { used_percentage: used, context_window_size: 200000 },
+        });
+      }
+      const output = runPreToolEnforcerWithEnv({
+        tool_name: toolName,
+        tool_input: { subagent_type: 'oh-my-claudecode:executor', prompt: 'Inspect the fixture' },
+        cwd: tempDir,
+        session_id: sessionId,
+      }, { CLAUDE_PLUGIN_ROOT: process.cwd() });
+      const hook = output.hookSpecificOutput as Record<string, unknown> | undefined;
+      expect(hook?.permissionDecision).not.toBe('deny');
+      expect(output.decision).not.toBe('block');
+    });
+  }
+
+  it('falls back to the default preflight threshold when the env value is invalid', async () => {
     const transcriptPath = join(tempDir, 'transcript.jsonl');
     writeTranscriptWithContext(transcriptPath, 1000, 800); // 80%
 
     for (const threshold of ['abc', '95abc', '0', '101']) {
-      const output = evaluateAgentHeavyPreflight({
+      const output = await evaluateAgentHeavyPreflight({
         toolName: 'Task',
         transcriptPath,
         env: {
@@ -1118,11 +1169,11 @@ describe('pre-tool-enforcer fallback gating (issue #970)', () => {
     }
   });
 
-  it('preserves a valid preflight threshold env value', () => {
+  it('preserves a valid preflight threshold env value', async () => {
     const transcriptPath = join(tempDir, 'transcript.jsonl');
     writeTranscriptWithContext(transcriptPath, 1000, 800); // 80%
 
-    const output = evaluateAgentHeavyPreflight({
+    const output = await evaluateAgentHeavyPreflight({
       toolName: 'Task',
       transcriptPath,
       env: {
